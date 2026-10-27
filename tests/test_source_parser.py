@@ -8,6 +8,43 @@ from sfxbas import source_parser as r
 
 
 class SourceParser(unittest.TestCase):
+    def test_active_sources_against_sorted_ranks(self):
+        import bisect
+        rnd=random.Random(256)
+        for n in (0,1,255,256,257,513,65536):
+            active=r.ActiveSources(n)
+            ranks=[]
+            for op in range(2000):
+                if n and rnd.random()<.5:
+                    rank=rnd.randrange(n)
+                    active.add(rank)
+                    i=bisect.bisect_left(ranks,rank)
+                    if i==len(ranks) or ranks[i]!=rank:ranks.insert(i,rank)
+                query=rnd.randrange(n+1)
+                i=bisect.bisect_left(ranks,query)
+                expected=ranks[max(0,i-1):i]+ranks[i:i+1]
+                self.assertEqual(active.neighbours(query),expected,(n,op,query))
+
+    def test_pair_trees_preserve_independent_tree_ties_and_reuse(self):
+        from sfxbas.matcher import MinTree
+        rnd=random.Random(35)
+        reference=(MinTree(256,255),MinTree(256,255))
+        trees=r.PairTrees()
+        for op in range(20000):
+            slot=rnd.randrange(256)
+            for tree in reference:tree.clear(slot)
+            if rnd.random()<.8:
+                cost,offset=rnd.randrange(5),rnd.randrange(5)
+                state=(op,slot)
+                reference[0].add(slot,(cost,state))
+                reference[1].add(slot,(cost-offset,state))
+                trees.set(slot,cost,state,offset)
+            else:trees.set(slot)
+            lo=rnd.randrange(256)
+            hi=min(256,lo+rnd.randrange(1,256))
+            for which,tree in enumerate(reference):
+                self.assertEqual(trees.min(which,lo,hi),tree.min(lo,hi),(op,which))
+
     def test_source_classes_against_exhaustive_search(self):
         rnd=random.Random(812)
         for case in range(100):

@@ -16,14 +16,14 @@ MinTree = m.MinTree
 
 
 def weights(lam, n):
-    """Encode exact primary cost and cycles as one integer without changing order.
+    """Encode exact primary cost and statement count without changing order.
 
-    A path or open statement has at most n+1 statements, each costing at most
-    7099 secondary cycles. Its entire secondary cost therefore fits below scale.
-    One primary unit outweighs every possible cycle saving for this input.
+    Within each parser every statement costs the same secondary cycles. Counting
+    statements preserves their order. A path or open statement has at most n+1
+    statements, so its secondary cost fits below scale.
     """
     numerator, denominator = float(lam).as_integer_ratio()
-    scale = 1 << (7099 * (n + 1)).bit_length()
+    scale = 1 << (n + 1).bit_length()
     return denominator * scale, numerator * scale, scale
 
 
@@ -32,7 +32,7 @@ def single(t, lam, base, ok, extra, rom, stop, pool=()):
     n = len(t)
     unit, numerator, scale = weights(lam, n)
     lengths, sources, kinds = m.with_pool(m.matches(t, base, ok, extra, rom), pool)
-    descriptor = 3*unit+numerator+5633
+    descriptor = 3*unit+numerator+1
     f, how = [0] + [INF]*n, [None]*(n+1)
     lit, win = deque(), deque()
     for p in range(1, n+1):
@@ -63,7 +63,7 @@ def paired(t, lam, base, ok, extra, rom, stop, pool=()):
     unit, numerator, scale = weights(lam, n)
     lengths, sources, kinds = m.with_pool(m.matches(t, base, ok, extra, rom), pool)
     far, far_sources = m.far_matches(t, ok)
-    statement = 6*unit+2*numerator+7099
+    statement = 6*unit+2*numerator+1
     f, how = [0] + [INF]*n, [None]*(n+1)
     lit, win = deque(), deque()
     primary_lit, primary_win = deque(), deque()

@@ -6,8 +6,92 @@ The existing parser remains a separate candidate; this is not exhaustive DP.
 import bisect
 from collections import deque
 from functools import lru_cache
-import heapq
-from . import matcher as m, cycle_parser
+from . import matcher as m
+
+_INF = float('inf')
+
+
+class ActiveSources:
+    """Active ranks in 256-bit blocks, indexed by a bitset of nonempty blocks."""
+    def __init__(self,n):
+        self.blocks=[0]*(n//256+1)
+        self.nonempty=0
+
+    def add(self,rank):
+        block=rank>>8
+        self.blocks[block]|=1<<(rank&255)
+        self.nonempty|=1<<block
+
+    def neighbours(self,rank):
+        """Nearest active rank below rank, then at or above rank."""
+        block,offset=rank>>8,rank&255
+        bits=self.blocks[block]
+        lower=bits&((1<<offset)-1)
+        result=[]
+        if lower:result.append((block<<8)+lower.bit_length()-1)
+        else:
+            blocks=self.nonempty&((1<<block)-1)
+            if blocks:
+                previous=blocks.bit_length()-1
+                result.append((previous<<8)+self.blocks[previous].bit_length()-1)
+        upper=bits>>offset
+        if upper:result.append(rank+(upper&-upper).bit_length()-1)
+        else:
+            blocks=self.nonempty>>(block+1)
+            if blocks:
+                following=block+(blocks&-blocks).bit_length()
+                bits=self.blocks[following]
+                result.append((following<<8)+(bits&-bits).bit_length()-1)
+        return result
+
+
+class PairTrees:
+    """Two 256-slot minima sharing a clear traversal and leaf payloads.
+
+    As in MinTree, clear selects the left child on ties and add retains the
+    existing winner. Queries never cover all 256 slots, so root 1 is unused.
+    """
+    def __init__(self):
+        self.values=([_INF]*512,[_INF]*512)
+        self.winners=([0]*512,[0]*512)
+        self.states=[None]*256
+
+    def set(self,slot,cost=_INF,state=None,offset=0):
+        a,b=self.values
+        wa,wb=self.winners
+        i=slot+256
+        a[i]=b[i]=_INF
+        i>>=1
+        while i>=2:
+            left=2*i;right=left+1
+            child=left if a[left]<=a[right] else right
+            a[i]=a[child];wa[i]=wa[child]
+            child=left if b[left]<=b[right] else right
+            b[i]=b[child];wb[i]=wb[child]
+            i>>=1
+        self.states[slot]=state
+        if state is None:return
+        for values,winners,c in ((a,wa,cost),(b,wb,cost-offset)):
+            i=slot+256
+            values[i]=c;winners[i]=slot
+            i>>=1
+            while i>=2 and c<values[i]:
+                values[i]=c;winners[i]=slot
+                i>>=1
+
+    def min(self,which,lo,hi):
+        values=self.values[which]
+        best,at=_INF,0
+        lo+=256;hi+=256
+        while lo<hi:
+            if lo&1:
+                if values[lo]<best:best,at=values[lo],lo
+                lo+=1
+            if hi&1:
+                hi-=1
+                if values[hi]<best:best,at=values[hi],hi
+            lo>>=1;hi>>=1
+        return best,self.states[self.winners[which][at]] if at else None
 
 
 @lru_cache(maxsize=12)
@@ -30,23 +114,29 @@ def source_classes(t, ok, edges=(), distances=(1, 32, 128, 255)):
     qranks = [bisect.bisect_left(keys,q) for q in queries]
     result = []
     for distance in distances:
-        active = m.ActiveRanks(len(entries))
+        active = ActiveSources(len(entries))
         lengths, sources = [0]*(n+1), [0]*(n+1)
         x = n
         for p in range(n,0,-1):
             while x >= p+distance:
                 if x in ranks: active.add(ranks[x])
                 x -= 1
-            count = active.count(qranks[p])
-            neighbours = ([active.kth(count)] if count else [])
-            if count < active.total: neighbours.append(active.kth(count+1))
             best = (0,0)
-            for k in neighbours:
+            for k in active.neighbours(qranks[p]):
                 length = m.common_prefix(queries[p],keys[k])
                 best = max(best,(length,entries[k][1]))
             lengths[p], sources[p] = best[0], best[1]-best[0]
         result.append((tuple(lengths),tuple(sources)))
     return tuple(result)
+
+
+@lru_cache(maxsize=12)
+def class_variants(t,ok):
+    """Lambda-independent source alternatives, deduplicated in discovery order."""
+    classes=source_classes(t,ok)
+    return ((),)+tuple(tuple(dict.fromkeys((p-l[p],'match',s[p]+l[p])
+                                          for l,s in classes if l[p]))
+                       for p in range(1,len(t)+1))
 
 
 @lru_cache(maxsize=32)
@@ -57,32 +147,36 @@ def paired(t,lam,base,ok,extra,rom,stop,pool=(),cycles=True):
     states. Every selected source is exact and every pair observes reach.
     """
     n = len(t)
-    unit,numerator,scale = cycle_parser.weights(lam,n)
-    statement = 6*unit+2*numerator+(7099 if cycles else 0)
+    # All statements have the same secondary cycle cost. Count statements for
+    # ties instead of carrying 7099 cycles each: smaller exact integers preserve
+    # the ordering. Without cycle ties, only the rational primary cost is needed.
+    numerator,denominator = float(lam).as_integer_ratio()
+    scale = 1 << (n+1).bit_length() if cycles else 1
+    unit,numerator = denominator*scale,numerator*scale
+    statement = 6*unit+2*numerator+int(cycles)
     lengths,sources,kinds = m.with_pool(m.matches(t,base,ok,extra,rom),pool)
-    classes = source_classes(t,ok)
+    variants_by_end = class_variants(t,ok)
     ring = 256
-    trees = m.MinTree(ring),m.MinTree(ring)
-    groups,expiry = {},[]
+    # Queries cover at most 255 slots, so the 256-slot root is never read.
+    trees = PairTrees()
+    groups,expiry = {},[[] for _ in range(ring)]
     f,how = [0]+[float('inf')]*n,[None]*(n+1)
     lit,win = deque(),deque()
     def update(b,p):
         group=groups[b]
         while group and group[-1][1]<p:group.pop()
-        for tree in trees:tree.clear(b%ring)
         if group:
             cost,limit,state=group[-1]
-            trees[0].add(b%ring,(cost,state))
-            trees[1].add(b%ring,(cost-b*unit,state))
-            heapq.heappush(expiry,(limit+1,b))
-    def query(tree,lo,hi,p):
+            trees.set(b%ring,cost,state,b*unit)
+            expiry[(limit+1)%ring].append(b)
+        else:trees.set(b%ring)
+    def query(tree,lo,hi):
         lo,hi = lo%ring,hi%ring
-        ranges = [(lo,hi)] if lo<hi else [(lo,ring),(0,hi)]
-        best = (float('inf'),None)
-        for a,b in ranges:
-            if a<b:
-                c,s = tree.min(a,b)
-                if c<best[0]:best=c,s
+        if lo<hi:return trees.min(tree,lo,hi)
+        best = trees.min(tree,lo,ring)
+        if hi:
+            c,s = trees.min(tree,0,hi)
+            if c<best[0]:best=c,s
         return best
     def starts(q,low):
         i = bisect.bisect_left(q,low)
@@ -94,8 +188,11 @@ def paired(t,lam,base,ok,extra,rom,stop,pool=(),cycles=True):
         if i+1 == last: return first,second
         return first,second,q[last]
     for p in range(1,n+1):
-        while expiry and expiry[0][0]<=p:
-            _,b=heapq.heappop(expiry)
+        # Every state expires within 255 endpoints. Sorting each bucket keeps
+        # the heap's (expiry, endpoint) order, including its tree tie effects.
+        due=expiry[p%ring]
+        expiry[p%ring]=[]
+        for b in sorted(due):
             if b in groups:update(b,p)
         j = p-1
         while lit and f[lit[-1]]-lit[-1]*unit >= f[j]-j*unit: lit.pop()
@@ -109,12 +206,12 @@ def paired(t,lam,base,ok,extra,rom,stop,pool=(),cycles=True):
             ca=win[bisect.bisect_left(win,p-lengths[p])]
             c=f[ca]+statement
             if c<best:best,h=c,('lone',ca,kinds[p],sources[p]+lengths[p]-(p-ca))
-        c,s=query(trees[1],max(0,p-255),p,p)
+        c,s=query(1,max(0,p-255),p)
         if c+p*unit<best:
             a,b,k,src=s
             best,h=c+p*unit,('pair',a,b,k,src,'lit',0)
         if lengths[p]:
-            c,s=query(trees[0],p-lengths[p],p,p)
+            c,s=query(0,p-lengths[p],p)
             if c<best:
                 a,b,k,src=s
                 best,h=c,('pair',a,b,k,src,kinds[p],sources[p]+lengths[p]-(p-b))
@@ -123,7 +220,7 @@ def paired(t,lam,base,ok,extra,rom,stop,pool=(),cycles=True):
         groups.pop(p-ring,None)
         variants=[(p-min(p,255),'lit',0)]
         if lengths[p]:variants.append((p-lengths[p],kinds[p],sources[p]+lengths[p]))
-        variants += [(p-l[p],'match',s[p]+l[p]) for l,s in classes if l[p]]
+        variants += variants_by_end[p]
         used=set();group=[]
         # Distance classes often choose the same source. Expand it only once;
         # dict order preserves the candidate order used to break equal costs.
