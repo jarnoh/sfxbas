@@ -3,8 +3,9 @@
 Packs a C64 program (.PRG) into a smaller, self-extracting **pure BASIC** program. The decruncher contains no machine
 code: it is only BASIC that you can `LIST` plus BASIC variable data in memory. 
 Use it to make a demo, game or intro load higher (RAM under $D000-$FFFF) or faster, 
-or to fit it into a size-limited compo.  One decrunched, the memory is byte-exact to the original.
-You can also use it when the rules allow BASIC only (hello <a href=https://zooparty.org>ZOO Party</a>).
+or to fit it into a size-limited compo.  Once decrunched, the memory is byte-exact to the original.
+
+You can also use it when the rules allow BASIC only (hello <a href=https://zooparty.org>ZOO Party</a>).  The decruncher uses only POKE, SYS41964 and standard BASIC instructions, so it matches the ZOOParty BASIC Effect competition rules.
 
 ```
 python3 -m sfxbas demo.prg -o demo_sfx.prg      
