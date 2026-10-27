@@ -11,6 +11,7 @@ import functools
 from collections import deque, namedtuple
 
 MAX_PART_LEN = 255
+_INF = float('inf')
 
 # kind: 'lit' (src unused), 'match' (src = index in t), 'rom' (src = ROM offset), 'skip' (src = hole index),
 # 'zero' ($0800, copied from the decruncher's end marker)
@@ -182,7 +183,8 @@ class ActiveRanks:
     def add(self, rank):
         self.total += 1
         i, tree = rank + 1, self.tree
-        while i < len(tree):
+        end = len(tree)
+        while i < end:
             tree[i] += 1
             i += i & -i
 
@@ -196,9 +198,10 @@ class ActiveRanks:
     def kth(self, k):
         """Zero-based rank of the k-th active entry (k is one-based)."""
         i, step, tree = 0, self.step, self.tree
+        end = len(tree)
         while step:
             j = i + step
-            if j < len(tree) and tree[j] < k:
+            if j < end and tree[j] < k:
                 i, k = j, k - tree[j]
             step >>= 1
         return i
@@ -293,7 +296,7 @@ class MinTree:
     Values and payloads are kept in two lists, which is faster than a list of pairs."""
     def __init__(self, n, span=None):
         self.size = 1 << max(1, (n - 1).bit_length())
-        self.val = [float('inf')] * (2 * self.size)
+        self.val = [_INF] * (2 * self.size)
         self.pay = [None] * (2 * self.size)
         self.top = max(1, self.size >> (span.bit_length() - 1)) if span else 1   # nodes below index top: never read
 
@@ -311,7 +314,7 @@ class MinTree:
     def clear(self, i):
         val, pay, top = self.val, self.pay, self.top
         i += self.size
-        val[i] = float('inf'); pay[i] = None
+        val[i] = _INF; pay[i] = None
         i >>= 1
         while i >= top:
             l = 2 * i
@@ -321,7 +324,7 @@ class MinTree:
 
     def min(self, lo, hi):
         val = self.val
-        best, at = float('inf'), 0
+        best, at = _INF, 0
         lo += self.size; hi += self.size
         while lo < hi:
             if lo & 1:

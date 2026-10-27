@@ -87,7 +87,12 @@ def paired(t,lam,base,ok,extra,rom,stop,pool=(),cycles=True):
     def starts(q,low):
         i = bisect.bisect_left(q,low)
         # Cheapest, next undominated, and latest: trade cost for pairing reach.
-        return list(dict.fromkeys(q[j] for j in (i,min(i+1,len(q)-1),len(q)-1)))
+        last = len(q)-1
+        first = q[i]
+        if i == last: return (first,)
+        second = q[i+1]
+        if i+1 == last: return first,second
+        return first,second,q[last]
     for p in range(1,n+1):
         while expiry and expiry[0][0]<=p:
             _,b=heapq.heappop(expiry)
@@ -120,7 +125,9 @@ def paired(t,lam,base,ok,extra,rom,stop,pool=(),cycles=True):
         if lengths[p]:variants.append((p-lengths[p],kinds[p],sources[p]+lengths[p]))
         variants += [(p-l[p],'match',s[p]+l[p]) for l,s in classes if l[p]]
         used=set();group=[]
-        for low,k,top in variants:
+        # Distance classes often choose the same source. Expand it only once;
+        # dict order preserves the candidate order used to break equal costs.
+        for low,k,top in dict.fromkeys(variants):
             for a in starts(lit if k=='lit' and top==0 else win,low):
                 # A pooled literal is a free copy, not a newly stored literal.
                 literal = k=='lit' and top==0 and low==p-min(p,255)
