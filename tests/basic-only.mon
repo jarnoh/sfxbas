@@ -1,0 +1,32 @@
+; BASIC-only execution guard for the C64.
+; Load with: x64sc -moncommands basic-only.mon
+; A hit enters the VICE monitor before the instruction executes.
+
+; The BASIC parser's CHRGET routine is copied into $0073-$008A at cold start.
+; It is intentional code in zero page, so leave that range out of the exec trap.
+; Bytes $7A-$7B are its self-modifying text pointer.
+; $0054-$0056 is another intentional BASIC trampoline: JMP to the selected
+; BASIC function. Allow it only while it is still a JMP into mapped BASIC or
+; KERNAL ROM; stop if the opcode or destination is changed to RAM/other memory.
+break exec $0000 $0053
+break exec $0054 if (@cpu:$0054 != $4c) || (@cpu:$0056 < $a0) || ((@cpu:$0056 >= $c0) && (@cpu:$0056 < $e0)) || ((@cpu:$0056 < $c0) && ((@cpu:$0001 & $03) != $03)) || ((@cpu:$0056 >= $e0) && ((@cpu:$0001 & $02) == $00))
+break exec $0055 $0072
+break exec $008b $00ff
+
+; Protect CHRGET's fixed instruction bytes from writes by RAM code. Its normal
+; self-modification at $7A-$7B is deliberately excluded. ROM writes (including
+; the cold-start copy from KERNAL ROM) are ignored by the conditions.
+watch store $0073 $0079 if (PC < $a000) || ((PC >= $c000) && (PC < $e000))
+watch store $007c $008a if (PC < $a000) || ((PC >= $c000) && (PC < $e000))
+
+; Remaining RAM below BASIC ROM, including the BASIC program area.
+break exec $0100 $9fff
+
+; RAM / I/O / character-ROM window. This is not BASIC or KERNAL ROM.
+break exec $c000 $dfff
+
+; Catch execution beneath BASIC ROM when the ROM is banked out.
+break exec $a000 $bfff if (@cpu:$0001 & $03) != $03
+
+; Catch execution beneath KERNAL ROM when the ROM is banked out.
+break exec $e000 $ffff if (@cpu:$0001 & $02) == $00
