@@ -8,6 +8,19 @@ from sfxbas import source_parser as r
 
 
 class SourceParser(unittest.TestCase):
+    def test_prefix_parse_keeps_sources_above_stop(self):
+        from sfxbas import matcher,cycle_parser
+        t=b'ABCD'*128
+        for parse in (matcher.cached_parse,matcher.paired_parse,
+                      cycle_parser.single,cycle_parser.paired,r.paired):
+            with self.subTest(parser=parse.__module__+'.'+parse.__name__):
+                parts=parse(t,10,0,bytes([1])*len(t),(),(),100)
+                self.assertEqual(len(parts),1)
+                part=parts[0]
+                self.assertEqual((part.start,part.length,part.kind),(0,100,'match'))
+                self.assertGreater(part.src+part.length,100)
+                self.assertEqual(t[part.src:part.src+part.length],t[:100])
+
     def test_active_sources_against_sorted_ranks(self):
         import bisect
         rnd=random.Random(256)

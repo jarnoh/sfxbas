@@ -255,13 +255,14 @@ def with_pool(found, pool):
 def cached_parse(t, lam, base, ok, extra, rom, stop, pool=()):
     """parse() with hashable arguments: build() parses the same ranges for several staging plans."""
     n = len(t)
+    end = n if stop is None else stop
     m, msrc, kind = with_pool(matches(t, base, ok, extra, rom), pool)
     # f[p] = cheapest cost of t[:p]. Two sliding-window minima make it O(n).
     INF = float('inf')
-    f, how = [0.0] + [INF] * n, [None] * (n + 1)
+    f, how = [0.0] + [INF] * end, [None] * (end + 1)
     lit = deque()                                        # argmin f[j] - j: best literal start
     win = deque()                                        # argmin f[j], monotone: best copy start
-    for p in range(1, n + 1):
+    for p in range(1, end + 1):
         j = p - 1
         while lit and f[lit[-1]] - lit[-1] >= f[j] - j: lit.pop()
         lit.append(j)
@@ -348,11 +349,20 @@ def paired_parse(t, lam, base, ok, extra, rom, stop, pool=()):
     of each kind is kept, from its cheapest start: a literal, a copy, and a copy from a far source.
     The first two are the lone parts ending at b."""
     n = len(t)
-    m, msrc, kind = with_pool(matches(t, base, ok, extra, rom), pool)
+    end = n if stop is None else stop
+    choices = with_pool(matches(t, base, ok, extra, rom), pool)
+    m, msrc, kind = (tuple(values[:end + 1]) for values in choices)
+    return paired_choices(t, lam, ok, end, m, msrc, kind)
+
+
+@functools.lru_cache(maxsize=32)
+def paired_choices(t, lam, ok, end, m, msrc, kind):
+    """Reuse the paired DP across plans with identical effective choices."""
+    n = len(t)
     fm, fsrc = far_matches(t, ok)
     INF = float('inf')
     S = 6 + 2 * lam
-    f, how = [0.0] + [INF] * n, [None] * (n + 1)
+    f, how = [0.0] + [INF] * end, [None] * (end + 1)
     lit, win = deque(), deque()
     W = 3                                                # slots per b: literal, copy, far copy
     open_c, open_l = (MinTree(W * (n + 1), W * MAX_PART_LEN) for _ in range(2))   # cost; cost - b for a literal u
@@ -367,7 +377,7 @@ def paired_parse(t, lam, base, ok, extra, rom, stop, pool=()):
         opened[slot] = (a, k, src)
         open_c.add(slot, (cost, slot)); open_l.add(slot, (cost - p, slot))
         reach[slot] = r
-    for p in range(1, n + 1):
+    for p in range(1, end + 1):
         j = p - 1
         while lit and f[lit[-1]] - lit[-1] >= f[j] - j: lit.pop()
         lit.append(j)
@@ -403,7 +413,7 @@ def paired_parse(t, lam, base, ok, extra, rom, stop, pool=()):
         if far and fm[p]:                                # a farther source reaches the whole 255 bytes
             a = win[bisect.bisect_left(win, p - fm[p])]
             open_d(W * p + 2, a, 'match', fsrc[p] + fm[p] - (p - a), f[a] + S, a + MAX_PART_LEN)
-    parts, p = [], n if stop is None else stop
+    parts, p = [], end
     while p:
         h = how[p]
         if h[0] == 'lone':

@@ -45,6 +45,18 @@ class ActiveSources:
         return result
 
 
+@lru_cache(maxsize=32768)
+def query_nodes(lo,hi):
+    """Segment nodes in MinTree's traversal order for a 256-slot query."""
+    lo+=256;hi+=256
+    nodes=[]
+    while lo<hi:
+        if lo&1:nodes.append(lo);lo+=1
+        if hi&1:hi-=1;nodes.append(hi)
+        lo>>=1;hi>>=1
+    return tuple(nodes)
+
+
 class PairTrees:
     """Two 256-slot minima sharing a clear traversal and leaf payloads.
 
@@ -81,17 +93,11 @@ class PairTrees:
 
     def min(self,which,lo,hi):
         values=self.values[which]
-        best,at=_INF,0
-        lo+=256;hi+=256
-        while lo<hi:
-            if lo&1:
-                if values[lo]<best:best,at=values[lo],lo
-                lo+=1
-            if hi&1:
-                hi-=1
-                if values[hi]<best:best,at=values[hi],hi
-            lo>>=1;hi>>=1
-        return best,self.states[self.winners[which][at]] if at else None
+        nodes=query_nodes(lo,hi)
+        if not nodes:return _INF,None
+        at=min(nodes,key=values.__getitem__)
+        best=values[at]
+        return best,self.states[self.winners[which][at]] if best<_INF else None
 
 
 @lru_cache(maxsize=12)
@@ -112,6 +118,9 @@ def source_classes(t, ok, edges=(), distances=(1, 32, 128, 255)):
     ranks = {x: i for i, (k, x) in enumerate(entries)}
     queries = [b''] + [t[max(0,p-255):p][::-1] for p in range(1,n+1)]
     qranks = [bisect.bisect_left(keys,q) for q in queries]
+    # Distance classes repeatedly compare the same byte strings. This cache is
+    # local to discovery and released with its keys when this call returns.
+    prefix=lru_cache(maxsize=None)(m.common_prefix)
     result = []
     for distance in distances:
         active = ActiveSources(len(entries))
@@ -123,7 +132,7 @@ def source_classes(t, ok, edges=(), distances=(1, 32, 128, 255)):
                 x -= 1
             best = (0,0)
             for k in active.neighbours(qranks[p]):
-                length = m.common_prefix(queries[p],keys[k])
+                length = prefix(queries[p],keys[k])
                 best = max(best,(length,entries[k][1]))
             lengths[p], sources[p] = best[0], best[1]-best[0]
         result.append((tuple(lengths),tuple(sources)))
@@ -147,6 +156,16 @@ def paired(t,lam,base,ok,extra,rom,stop,pool=(),cycles=True):
     states. Every selected source is exact and every pair observes reach.
     """
     n = len(t)
+    end = n if stop is None else stop
+    choices=m.with_pool(m.matches(t,base,ok,extra,rom),pool)
+    lengths,sources,kinds=(tuple(values[:end+1]) for values in choices)
+    return paired_choices(t,lam,ok,end,lengths,sources,kinds,cycles)
+
+
+@lru_cache(maxsize=32)
+def paired_choices(t,lam,ok,end,lengths,sources,kinds,cycles):
+    """Share a DP when staging plans yield identical effective copy choices."""
+    n=len(t)
     # All statements have the same secondary cycle cost. Count statements for
     # ties instead of carrying 7099 cycles each: smaller exact integers preserve
     # the ordering. Without cycle ties, only the rational primary cost is needed.
@@ -154,13 +173,12 @@ def paired(t,lam,base,ok,extra,rom,stop,pool=(),cycles=True):
     scale = 1 << (n+1).bit_length() if cycles else 1
     unit,numerator = denominator*scale,numerator*scale
     statement = 6*unit+2*numerator+int(cycles)
-    lengths,sources,kinds = m.with_pool(m.matches(t,base,ok,extra,rom),pool)
     variants_by_end = class_variants(t,ok)
     ring = 256
     # Queries cover at most 255 slots, so the 256-slot root is never read.
     trees = PairTrees()
     groups,expiry = {},[[] for _ in range(ring)]
-    f,how = [0]+[float('inf')]*n,[None]*(n+1)
+    f,how = [0]+[_INF]*end,[None]*(end+1)
     lit,win = deque(),deque()
     def update(b,p):
         group=groups[b]
@@ -187,7 +205,7 @@ def paired(t,lam,base,ok,extra,rom,stop,pool=(),cycles=True):
         second = q[i+1]
         if i+1 == last: return first,second
         return first,second,q[last]
-    for p in range(1,n+1):
+    for p in range(1,end+1):
         # Every state expires within 255 endpoints. Sorting each bucket keeps
         # the heap's (expiry, endpoint) order, including its tree tie effects.
         due=expiry[p%ring]
@@ -237,7 +255,7 @@ def paired(t,lam,base,ok,extra,rom,stop,pool=(),cycles=True):
                 group.append((cost,limit,(a,p,k,src)))
         groups[p]=sorted(group,key=lambda x:(x[0],-x[1]),reverse=True)
         update(p,p+1)
-    parts=[];p=n if stop is None else stop
+    parts=[];p=end
     while p:
         h=how[p]
         if h[0]=='lone':

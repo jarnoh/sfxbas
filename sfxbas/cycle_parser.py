@@ -30,12 +30,13 @@ def weights(lam, n):
 @functools.lru_cache(maxsize=32)
 def single(t, lam, base, ok, extra, rom, stop, pool=()):
     n = len(t)
+    end = n if stop is None else stop
     unit, numerator, scale = weights(lam, n)
     lengths, sources, kinds = m.with_pool(m.matches(t, base, ok, extra, rom), pool)
     descriptor = 3*unit+numerator+1
-    f, how = [0] + [INF]*n, [None]*(n+1)
+    f, how = [0] + [INF]*end, [None]*(end+1)
     lit, win = deque(), deque()
-    for p in range(1, n+1):
+    for p in range(1, end+1):
         j = p-1
         while lit and f[lit[-1]]-lit[-1]*unit >= f[j]-j*unit: lit.pop()
         lit.append(j)
@@ -60,11 +61,20 @@ def single(t, lam, base, ok, extra, rom, stop, pool=()):
 @functools.lru_cache(maxsize=32)
 def paired(t, lam, base, ok, extra, rom, stop, pool=()):
     n = len(t)
+    end = n if stop is None else stop
+    choices = m.with_pool(m.matches(t, base, ok, extra, rom), pool)
+    lengths, sources, kinds = (tuple(values[:end+1]) for values in choices)
+    return paired_choices(t, lam, ok, end, lengths, sources, kinds)
+
+
+@functools.lru_cache(maxsize=32)
+def paired_choices(t, lam, ok, end, lengths, sources, kinds):
+    """Reuse the cycle-aware DP across identical effective copy choices."""
+    n = len(t)
     unit, numerator, scale = weights(lam, n)
-    lengths, sources, kinds = m.with_pool(m.matches(t, base, ok, extra, rom), pool)
     far, far_sources = m.far_matches(t, ok)
     statement = 6*unit+2*numerator+1
-    f, how = [0] + [INF]*n, [None]*(n+1)
+    f, how = [0] + [INF]*end, [None]*(end+1)
     lit, win = deque(), deque()
     primary_lit, primary_win = deque(), deque()
     primary = [0]*(n+1)
@@ -80,7 +90,7 @@ def paired(t, lam, base, ok, extra, rom, stop, pool=()):
         opened[slot] = a, kind, src
         open_c.add(slot, (score, slot)); open_l.add(slot, (score-p*unit, slot))
         reach[slot] = limit
-    for p in range(1, n+1):
+    for p in range(1, end+1):
         j = p-1
         while lit and f[lit[-1]]-lit[-1]*unit >= f[j]-j*unit: lit.pop()
         lit.append(j)
@@ -129,7 +139,7 @@ def paired(t, lam, base, ok, extra, rom, stop, pool=()):
             open_d(slots*p+2, a, 'match', far_sources[p]+far[p]-(p-a), f[a]+statement, a+m.MAX_PART_LEN)
             legacy_a = primary_win[bisect.bisect_left(primary_win,p-far[p])]
             open_d(slots*p+5, legacy_a, 'match', far_sources[p]+far[p]-(p-legacy_a), f[legacy_a]+statement, legacy_a+m.MAX_PART_LEN)
-    parts, p = [], n if stop is None else stop
+    parts, p = [], end
     while p:
         h = how[p]
         if h[0] == 'lone':
